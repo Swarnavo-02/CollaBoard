@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Realtime Whiteboard</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <div id="home" class="centered">
+    <h1>Realtime Whiteboard</h1>
+    <input id="username" placeholder="Your name" />
+    <input id="room" placeholder="Room code (or leave blank for random)" />
+    <button id="joinBtn">Join/Create Room</button>
+  </div>
+  <div id="board" class="hidden">
+    <div class="topbar">
+      <span id="roomCode"></span>
+      <button id="leaveBtn">Leave Room</button>
+    </div>
+    <div class="main">
+      <canvas id="canvas"></canvas>
+      <div class="sidebar">
+        <div class="users">
+          <h3>Users</h3>
+          <ul id="userList"></ul>
+        </div>
+        <div class="chat">
+          <h3>Chat</h3>
+          <div id="chatBox"></div>
+          <form id="chatForm">
+            <input id="chatInput" autocomplete="off" placeholder="Type a message..." />
+            <button>Send</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html> 
