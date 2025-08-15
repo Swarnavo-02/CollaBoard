@@ -69,11 +69,12 @@ let erasing = false;
 let userColors = {};
 let imagesOnCanvas = [];
 let draggingImage = null;
-let dragOffset = {x:0, y:0};
+let dragOffset = { x: 0, y: 0 };
 let resizingImage = null;
-let resizeStart = {x:0, y:0, w:0, h:0};
+let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
 let selectedImage = null;
 let lockedImage = null;
+let selectedStickyNote = null;
 let localStream = null;
 let peerConnections = {};
 let isMicOn = false;
@@ -147,6 +148,23 @@ function getRandomColor() {
   return colors[Math.floor(Math.random() * colors.length)];
 }
 
+// Show notification to user
+function showNotification(message, type = 'info') {
+  const notification = document.createElement('div');
+  notification.className = `notification ${type}`;
+  notification.textContent = message;
+
+  const container = document.getElementById('notificationContainer') || document.body;
+  container.appendChild(notification);
+
+  // Auto-remove after 3 seconds
+  setTimeout(() => {
+    if (notification.parentNode) {
+      notification.parentNode.removeChild(notification);
+    }
+  }, 3000);
+}
+
 // --- Collapsible Chat ---
 function setChatCollapsed(collapsed) {
   if (!chatArea) return;
@@ -176,13 +194,34 @@ function setSidebarHidden(hidden) {
   mainContent.classList.toggle('sidebar-hidden', !!hidden);
   // accessibility hint
   if (chatSidebarToggle) chatSidebarToggle.setAttribute('aria-pressed', String(!!hidden));
-  // Recompute canvas size
-  setTimeout(() => { resizeCanvas(); drawAll(); }, 0);
+
+  // Force canvas area to recalculate its size and scroll position
+  const canvasArea = document.querySelector('.canvas-area');
+  if (canvasArea) {
+    // Trigger a reflow to ensure proper sizing
+    canvasArea.style.width = '100%';
+    canvasArea.offsetHeight; // Force reflow
+  }
+
+  // Recompute canvas size with a slight delay to allow CSS transitions
+  setTimeout(() => {
+    resizeCanvas();
+    drawAll();
+    // Ensure scroll position is maintained
+    if (canvasArea) {
+      canvasArea.scrollLeft = Math.min(canvasArea.scrollLeft, canvasArea.scrollWidth - canvasArea.clientWidth);
+      canvasArea.scrollTop = Math.min(canvasArea.scrollTop, canvasArea.scrollHeight - canvasArea.clientHeight);
+    }
+  }, 100);
 }
 if (chatSidebarToggle) {
   chatSidebarToggle.onclick = () => {
     const isHidden = mainContent.classList.contains('sidebar-hidden');
     setSidebarHidden(!isHidden);
+
+    // Show a brief notification about the change
+    const action = isHidden ? 'shown' : 'hidden';
+    showNotification(`Chat panel ${action}. Use scroll to navigate the whiteboard.`, 'info');
   };
 }
 if (chatFab) {
@@ -218,25 +257,133 @@ if (clearChatBtn) {
 
 // Responsive canvas
 function resizeCanvas() {
-  // Set canvas size to match the displayed size with robust fallbacks
-  const area = document.querySelector('.canvas-area');
-  let width, height;
-  if (area) {
-    const rect = area.getBoundingClientRect();
-    const toolbarEl = document.querySelector('.toolbar');
-    const pageNavEl = document.getElementById('pageNav');
-    const headerSpace = (toolbarEl ? toolbarEl.getBoundingClientRect().height + 16 : 0)
-      + (pageNavEl ? pageNavEl.getBoundingClientRect().height + 12 : 0);
-    width = Math.max(0, Math.floor(rect.width));
-    // If the area has no height yet (e.g., flex sizing), fallback to viewport
-    height = Math.floor(rect.height || (window.innerHeight - headerSpace - 48));
-  } else {
-    width = window.innerWidth - 340;
-    height = window.innerHeight - 80;
+  // Set canvas to fixed large dimensions to ensure consistent drawing area
+  const width = 2560; // Fixed width for 2K+ support
+  const height = 1440; // Fixed height for 2K+ support
+
+  // Set canvas to fixed large dimensions to prevent cutting off drawings
+  canvas.width = width;
+  canvas.height = height;
+}
+
+// Initialize custom scrollbars
+function initCustomScrollbars() {
+  const scrollableArea = document.querySelector('.canvas-scrollable');
+  const verticalThumb = document.querySelector('.scrollbar-thumb-vertical');
+  const horizontalThumb = document.querySelector('.scrollbar-thumb-horizontal');
+  const verticalTrack = document.querySelector('.scrollbar-vertical');
+  const horizontalTrack = document.querySelector('.scrollbar-horizontal');
+
+  if (!scrollableArea || !verticalThumb || !horizontalThumb) return;
+
+  let isDraggingVertical = false;
+  let isDraggingHorizontal = false;
+  let startY = 0;
+  let startX = 0;
+  let startScrollTop = 0;
+  let startScrollLeft = 0;
+
+  // Update scrollbar positions based on scroll
+  function updateScrollbars() {
+    const scrollTop = scrollableArea.scrollTop;
+    const scrollLeft = scrollableArea.scrollLeft;
+    const scrollHeight = scrollableArea.scrollHeight;
+    const scrollWidth = scrollableArea.scrollWidth;
+    const clientHeight = scrollableArea.clientHeight;
+    const clientWidth = scrollableArea.clientWidth;
+
+    // Calculate thumb positions and sizes
+    const verticalRatio = clientHeight / scrollHeight;
+    const horizontalRatio = clientWidth / scrollWidth;
+
+    const thumbHeight = Math.max(20, verticalRatio * (clientHeight - 4));
+    const thumbWidth = Math.max(20, horizontalRatio * (clientWidth - 4));
+
+    const maxVerticalScroll = scrollHeight - clientHeight;
+    const maxHorizontalScroll = scrollWidth - clientWidth;
+
+    const thumbTop = maxVerticalScroll > 0 ? (scrollTop / maxVerticalScroll) * (clientHeight - thumbHeight - 4) : 0;
+    const thumbLeft = maxHorizontalScroll > 0 ? (scrollLeft / maxHorizontalScroll) * (clientWidth - thumbWidth - 4) : 0;
+
+    // Update thumb positions and sizes
+    verticalThumb.style.height = thumbHeight + 'px';
+    verticalThumb.style.top = thumbTop + 2 + 'px';
+
+    horizontalThumb.style.width = thumbWidth + 'px';
+    horizontalThumb.style.left = thumbLeft + 2 + 'px';
+
+    // Show/hide scrollbars based on content
+    verticalTrack.style.opacity = scrollHeight > clientHeight ? '1' : '0.3';
+    horizontalTrack.style.opacity = scrollWidth > clientWidth ? '1' : '0.3';
   }
-  // Enforce sensible minimums so the canvas never collapses
-  canvas.width = Math.max(300, width || 0);
-  canvas.height = Math.max(300, height || 0);
+
+  // Vertical scrollbar drag
+  verticalThumb.addEventListener('mousedown', (e) => {
+    isDraggingVertical = true;
+    startY = e.clientY;
+    startScrollTop = scrollableArea.scrollTop;
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  // Horizontal scrollbar drag
+  horizontalThumb.addEventListener('mousedown', (e) => {
+    isDraggingHorizontal = true;
+    startX = e.clientX;
+    startScrollLeft = scrollableArea.scrollLeft;
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  // Mouse move handler
+  document.addEventListener('mousemove', (e) => {
+    if (isDraggingVertical) {
+      const deltaY = e.clientY - startY;
+      const scrollRatio = (scrollableArea.scrollHeight - scrollableArea.clientHeight) / (scrollableArea.clientHeight - verticalThumb.offsetHeight - 4);
+      scrollableArea.scrollTop = startScrollTop + deltaY * scrollRatio;
+    }
+
+    if (isDraggingHorizontal) {
+      const deltaX = e.clientX - startX;
+      const scrollRatio = (scrollableArea.scrollWidth - scrollableArea.clientWidth) / (scrollableArea.clientWidth - horizontalThumb.offsetWidth - 4);
+      scrollableArea.scrollLeft = startScrollLeft + deltaX * scrollRatio;
+    }
+  });
+
+  // Mouse up handler
+  document.addEventListener('mouseup', () => {
+    isDraggingVertical = false;
+    isDraggingHorizontal = false;
+    document.body.style.userSelect = '';
+  });
+
+  // Track click handlers
+  verticalTrack.addEventListener('click', (e) => {
+    if (e.target === verticalThumb) return;
+    const rect = verticalTrack.getBoundingClientRect();
+    const clickY = e.clientY - rect.top;
+    const thumbCenter = verticalThumb.offsetTop + verticalThumb.offsetHeight / 2;
+    const direction = clickY < thumbCenter ? -1 : 1;
+    scrollableArea.scrollTop += direction * scrollableArea.clientHeight * 0.8;
+  });
+
+  horizontalTrack.addEventListener('click', (e) => {
+    if (e.target === horizontalThumb) return;
+    const rect = horizontalTrack.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const thumbCenter = horizontalThumb.offsetLeft + horizontalThumb.offsetWidth / 2;
+    const direction = clickX < thumbCenter ? -1 : 1;
+    scrollableArea.scrollLeft += direction * scrollableArea.clientWidth * 0.8;
+  });
+
+  // Update scrollbars on scroll
+  scrollableArea.addEventListener('scroll', updateScrollbars);
+
+  // Initial update
+  setTimeout(updateScrollbars, 100);
+
+  // Store reference for other functions
+  window.updateScrollbars = updateScrollbars;
 }
 window.addEventListener('resize', resizeCanvas);
 // ResizeObserver for smoother canvas resize when layout changes
@@ -249,7 +396,7 @@ try {
     });
     ro.observe(area);
   }
-} catch (_) {}
+} catch (_) { }
 
 // Initialize UI on load
 window.addEventListener('DOMContentLoaded', () => {
@@ -268,7 +415,197 @@ window.addEventListener('DOMContentLoaded', () => {
   updateChatFabVisibility();
   // Default: show sidebar; user can hide it via toggle for full-width canvas
   setSidebarHidden(false);
+  // Initialize scroll hint
+  initScrollHint();
+  // Initialize keyboard navigation
+  initKeyboardNavigation();
+  // Remove any remaining scroll indicators
+  removeScrollIndicators();
+  // Normalize toolbar buttons padding and size
+  try {
+    document.querySelectorAll('.toolbar-btn').forEach(btn => {
+      btn.style.padding = '8px 10px';
+      btn.style.minWidth = '40px';
+      btn.style.minHeight = '40px';
+      btn.style.lineHeight = '1';
+    });
+    const psp = document.getElementById('penSizePreview');
+    if (psp) { psp.style.width = '40px'; psp.style.height = '18px'; }
+  } catch (_) {}
+  // Remove Pages button from toolbox if present
+  try { if (typeof multiPageBtn !== 'undefined' && multiPageBtn) multiPageBtn.remove(); } catch (_) {}
+  // Hide invite URL input (use only copy button)
+  try {
+    const il = document.getElementById('inviteLink');
+    if (il) il.style.display = 'none';
+  } catch (_) {}
 });
+
+// Remove any remaining scroll indicators
+function removeScrollIndicators() {
+  // Remove any elements with scroll indicator classes
+  const indicators = document.querySelectorAll('.scroll-indicator, .scroll-position, .position-indicator, [class*="scroll-indicator"], [class*="position-indicator"]');
+  indicators.forEach(el => el.remove());
+
+  // Also check for any dynamically created indicators
+  setTimeout(() => {
+    const moreIndicators = document.querySelectorAll('.scroll-indicator, .scroll-position, .position-indicator, [class*="scroll-indicator"], [class*="position-indicator"]');
+    moreIndicators.forEach(el => el.remove());
+  }, 1000);
+}
+
+// Simple scroll hint management
+function initScrollHint() {
+  const scrollHint = document.getElementById('scrollHint');
+  const canvasArea = document.querySelector('.canvas-area');
+
+  if (!scrollHint || !canvasArea) return;
+
+  // Hide hint after user scrolls or after 5 seconds
+  let hintTimeout = setTimeout(() => {
+    scrollHint.classList.add('hidden');
+  }, 5000);
+
+  canvasArea.addEventListener('scroll', () => {
+    clearTimeout(hintTimeout);
+    scrollHint.classList.add('hidden');
+  }, { once: true });
+
+  // Also hide on first drawing action
+  canvas.addEventListener('mousedown', () => {
+    clearTimeout(hintTimeout);
+    scrollHint.classList.add('hidden');
+  }, { once: true });
+
+  canvas.addEventListener('touchstart', () => {
+    clearTimeout(hintTimeout);
+    scrollHint.classList.add('hidden');
+  }, { once: true });
+}
+
+// Keyboard navigation for canvas scrolling
+function initKeyboardNavigation() {
+  const canvasArea = document.querySelector('.canvas-area');
+  if (!canvasArea) return;
+
+  document.addEventListener('keydown', (e) => {
+    // Only handle keys when not typing in input fields
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.contentEditable === 'true') {
+      return;
+    }
+
+    const scrollAmount = 50;
+    let handled = false;
+
+    switch (e.key) {
+      case 'ArrowLeft':
+        canvasArea.scrollLeft -= scrollAmount;
+        handled = true;
+        break;
+      case 'ArrowRight':
+        canvasArea.scrollLeft += scrollAmount;
+        handled = true;
+        break;
+      case 'ArrowUp':
+        canvasArea.scrollTop -= scrollAmount;
+        handled = true;
+        break;
+      case 'ArrowDown':
+        canvasArea.scrollTop += scrollAmount;
+        handled = true;
+        break;
+      case 'Home':
+        if (e.ctrlKey) {
+          canvasArea.scrollLeft = 0;
+          canvasArea.scrollTop = 0;
+          handled = true;
+        }
+        break;
+      case 'End':
+        if (e.ctrlKey) {
+          canvasArea.scrollLeft = canvasArea.scrollWidth;
+          canvasArea.scrollTop = canvasArea.scrollHeight;
+          handled = true;
+        }
+        break;
+    }
+
+    if (handled) {
+      e.preventDefault();
+      showNotification('Use arrow keys to navigate, Ctrl+Home for top-left, Ctrl+End for bottom-right', 'info');
+    }
+  });
+}
+
+// Scroll hint management
+function initScrollHint() {
+  const scrollHint = document.getElementById('scrollHint');
+  const canvasArea = document.querySelector('.canvas-area');
+
+  if (!scrollHint || !canvasArea) return;
+
+  // Update hint text to be more specific about both directions
+  scrollHint.innerHTML = '<span>💡 Tip: Scroll horizontally & vertically to see the full drawing area</span>';
+
+  // Hide hint after user scrolls or after 7 seconds (longer for more detailed message)
+  let hintTimeout = setTimeout(() => {
+    scrollHint.classList.add('hidden');
+  }, 7000);
+
+  canvasArea.addEventListener('scroll', () => {
+    clearTimeout(hintTimeout);
+    scrollHint.classList.add('hidden');
+  }, { once: true });
+
+  // Also hide on first drawing action
+  canvas.addEventListener('mousedown', () => {
+    clearTimeout(hintTimeout);
+    scrollHint.classList.add('hidden');
+  }, { once: true });
+
+  canvas.addEventListener('touchstart', () => {
+    clearTimeout(hintTimeout);
+    scrollHint.classList.add('hidden');
+  }, { once: true });
+
+  // Add scroll position indicator
+  addScrollIndicator(canvasArea);
+}
+
+// Add scroll position indicator
+function addScrollIndicator(canvasArea) {
+  // Create scroll position indicator
+  const scrollIndicator = document.createElement('div');
+  scrollIndicator.className = 'scroll-indicator';
+  scrollIndicator.innerHTML = `
+    <div class="scroll-position">
+      <span class="scroll-x">H: 0%</span>
+      <span class="scroll-y">V: 0%</span>
+    </div>
+  `;
+  canvasArea.appendChild(scrollIndicator);
+
+  // Update scroll position indicator
+  let scrollTimeout;
+  canvasArea.addEventListener('scroll', () => {
+    const scrollXPercent = Math.round((canvasArea.scrollLeft / (canvasArea.scrollWidth - canvasArea.clientWidth)) * 100) || 0;
+    const scrollYPercent = Math.round((canvasArea.scrollTop / (canvasArea.scrollHeight - canvasArea.clientHeight)) * 100) || 0;
+
+    scrollIndicator.querySelector('.scroll-x').textContent = `H: ${scrollXPercent}%`;
+    scrollIndicator.querySelector('.scroll-y').textContent = `V: ${scrollYPercent}%`;
+
+    // Show indicator while scrolling
+    canvasArea.classList.add('scrolling');
+    scrollIndicator.style.opacity = '0.8';
+
+    // Hide indicator after scrolling stops
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(() => {
+      canvasArea.classList.remove('scrolling');
+      scrollIndicator.style.opacity = '0';
+    }, 1500);
+  });
+}
 
 // Drawing events (use precise mouse-to-canvas mapping)
 function getCanvasCoords(e) {
@@ -297,7 +634,7 @@ canvas.addEventListener('mousedown', (e) => {
     ) {
       selectedImage = img;
       resizingImage = img;
-      resizeStart = {x: mouse.x, y: mouse.y, w: img.w, h: img.h};
+      resizeStart = { x: mouse.x, y: mouse.y, w: img.w, h: img.h };
       found = true;
       drawAll();
       return;
@@ -308,7 +645,7 @@ canvas.addEventListener('mousedown', (e) => {
     ) {
       selectedImage = img;
       draggingImage = img;
-      dragOffset = {x: mouse.x - img.x, y: mouse.y - img.y};
+      dragOffset = { x: mouse.x - img.x, y: mouse.y - img.y };
       found = true;
       drawAll();
       return;
@@ -399,21 +736,27 @@ function getTouchCoords(touch) {
 }
 canvas.addEventListener('touchstart', (e) => {
   if (!e.touches || e.touches.length === 0) return;
-  e.preventDefault();
-  // Start a new stroke on first touch
-  const t = e.touches[0];
-  drawing = true;
-  last = getTouchCoords(t);
-  activeStrokeId = ++strokeIdCounter;
+  // Only prevent default if we're actually drawing (not scrolling)
+  if (e.touches.length === 1) {
+    e.preventDefault();
+    // Start a new stroke on first touch
+    const t = e.touches[0];
+    drawing = true;
+    last = getTouchCoords(t);
+    activeStrokeId = ++strokeIdCounter;
+  }
 }, { passive: false });
 canvas.addEventListener('touchmove', (e) => {
   if (!drawing) return;
   if (!e.touches || e.touches.length === 0) return;
-  e.preventDefault();
-  const t = e.touches[0];
-  const curr = getTouchCoords(t);
-  drawLine(last, curr, penColor, penSize, true, true);
-  last = curr;
+  // Only prevent default when actively drawing
+  if (e.touches.length === 1 && drawing) {
+    e.preventDefault();
+    const t = e.touches[0];
+    const curr = getTouchCoords(t);
+    drawLine(last, curr, penColor, penSize, true, true);
+    last = curr;
+  }
 }, { passive: false });
 canvas.addEventListener('touchend', (e) => {
   e.preventDefault();
@@ -430,6 +773,8 @@ canvas.addEventListener('touchcancel', (e) => {
 }, { passive: false });
 
 function drawLine(from, to, color, size, emit, save) {
+  const prevComp = ctx.globalCompositeOperation;
+  ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
   ctx.strokeStyle = color;
   ctx.lineWidth = size;
   ctx.lineCap = 'round';
@@ -438,14 +783,15 @@ function drawLine(from, to, color, size, emit, save) {
   ctx.lineTo(to.x, to.y);
   ctx.stroke();
   ctx.closePath();
+  ctx.globalCompositeOperation = prevComp;
   if (save) {
     if (!pages[currentPage].drawings) pages[currentPage].drawings = [];
-    const drawing = { from, to, color, size, user: username, strokeId: activeStrokeId };
+    const drawing = { from, to, color, size, user: username, strokeId: activeStrokeId, erase: !!erasing };
     pages[currentPage].drawings.push(drawing);
     if (drawing.user === username) redoStack = [];
   }
   if (emit) {
-    socket.emit('draw', { from, to, color, size, user: username, page: currentPage, strokeId: activeStrokeId });
+    socket.emit('draw', { from, to, color, size, user: username, page: currentPage, strokeId: activeStrokeId, erase: !!erasing });
   }
 }
 
@@ -454,9 +800,11 @@ socket.on('draw', (data) => {
   // Ensure pages array can hold target page
   while (pages.length <= targetPage) pages.push({ snapshot: null, notes: [], images: [], drawings: [] });
   if (!pages[targetPage].drawings) pages[targetPage].drawings = [];
-  pages[targetPage].drawings.push({ from: data.from, to: data.to, color: data.color, size: data.size, user: data.user, strokeId: data.strokeId });
+  pages[targetPage].drawings.push({ from: data.from, to: data.to, color: data.color, size: data.size, user: data.user, strokeId: data.strokeId, erase: !!data.erase });
   if (targetPage === currentPage) {
     // Draw only if on the same page
+    const prevComp = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = data.erase ? 'destination-out' : 'source-over';
     ctx.strokeStyle = data.color;
     ctx.lineWidth = data.size;
     ctx.lineCap = 'round';
@@ -465,6 +813,7 @@ socket.on('draw', (data) => {
     ctx.lineTo(data.to.x, data.to.y);
     ctx.stroke();
     ctx.closePath();
+    ctx.globalCompositeOperation = prevComp;
   }
 });
 
@@ -480,7 +829,7 @@ socket.on('chat', (msg) => {
   const div = document.createElement('div');
   div.className = 'msg';
   const color = userColors[msg.user] || '#7c3aed';
-  const time = msg.time ? new Date(msg.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+  const time = msg.time ? new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   div.innerHTML = `<span class="user"><span class="user-avatar" style="background:${color}"></span>${msg.user}:</span> ${msg.message} <span class="timestamp">${time}</span>`;
   chatBox.appendChild(div);
   chatBox.scrollTop = chatBox.scrollHeight;
@@ -514,21 +863,65 @@ socket.on('connect', clearCanvas);
 
 // --- Toolbar Popover Logic ---
 function closeAllPopovers() {
-  colorPopover.classList.remove('active');
-  penSizePopover.classList.remove('active');
+  if (colorPopover) colorPopover.classList.remove('active');
+  if (penSizePopover) penSizePopover.classList.remove('active');
 }
-colorBtn.onclick = (e) => {
-  e.stopPropagation();
-  colorPopover.classList.toggle('active');
-  penSizePopover.classList.remove('active');
-};
-penSizeBtn.onclick = (e) => {
-  e.stopPropagation();
-  penSizePopover.classList.toggle('active');
-  colorPopover.classList.remove('active');
-};
+
+function positionPopover(popover, button) {
+  if (!popover || !button) return;
+
+  const buttonRect = button.getBoundingClientRect();
+  const popoverRect = popover.getBoundingClientRect();
+
+  // Position below the button, centered
+  let left = buttonRect.left + (buttonRect.width / 2) - (popoverRect.width / 2);
+  let top = buttonRect.bottom + 12;
+
+  // Keep popover within viewport
+  if (left < 10) left = 10;
+  if (left + popoverRect.width > window.innerWidth - 10) {
+    left = window.innerWidth - popoverRect.width - 10;
+  }
+  if (top + popoverRect.height > window.innerHeight - 10) {
+    top = buttonRect.top - popoverRect.height - 12;
+  }
+
+  // Use fixed positioning to anchor to viewport and ensure it stays aligned with the button
+  popover.style.position = 'fixed';
+  popover.style.zIndex = '1000';
+  popover.style.left = left + 'px';
+  popover.style.top = top + 'px';
+}
+
+if (colorBtn) {
+  colorBtn.onclick = (e) => {
+    e.stopPropagation();
+    closeAllPopovers();
+    if (colorPopover) {
+      colorPopover.classList.add('active');
+      // Position after a brief delay to ensure popover is rendered
+      setTimeout(() => positionPopover(colorPopover, colorBtn), 10);
+    }
+  };
+}
+
+if (penSizeBtn) {
+  penSizeBtn.onclick = (e) => {
+    e.stopPropagation();
+    closeAllPopovers();
+    if (penSizePopover) {
+      penSizePopover.classList.add('active');
+      // Position after a brief delay to ensure popover is rendered
+      setTimeout(() => positionPopover(penSizePopover, penSizeBtn), 10);
+    }
+  };
+}
+
 document.body.addEventListener('click', closeAllPopovers);
-toolbar.addEventListener('click', (e) => e.stopPropagation());
+if (toolbar) toolbar.addEventListener('click', (e) => e.stopPropagation());
+// Prevent clicks inside popovers from closing them
+if (colorPopover) colorPopover.addEventListener('click', (e) => e.stopPropagation());
+if (penSizePopover) penSizePopover.addEventListener('click', (e) => e.stopPropagation());
 
 // --- Color Swatches ---
 const SWATCHES = [
@@ -537,10 +930,10 @@ const SWATCHES = [
 
 // --- Emoji Picker ---
 const EMOJIS = [
-  '😀','😁','😂','🤣','😊','😍','😘','😎','🤩','😇',
-  '🙂','😉','😌','😅','🤗','🤝','👍','👏','🙏','💪',
-  '🎉','✨','🔥','💯','✅','❌','⚡','💡','🧠','📝',
-  '📌','📎','📷','🎤','🎧','🖼️','📄','✏️','🖊️','🧭'
+  '😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤩', '😇',
+  '🙂', '😉', '😌', '😅', '🤗', '🤝', '👍', '👏', '🙏', '💪',
+  '🎉', '✨', '🔥', '💯', '✅', '❌', '⚡', '💡', '🧠', '📝',
+  '📌', '📎', '📷', '🎤', '🎧', '🖼️', '📄', '✏️', '🖊️', '🧭'
 ];
 
 function openEmojiPopover() {
@@ -565,6 +958,13 @@ function openEmojiPopover() {
   // Show temporarily to measure, then position within viewport near the button
   emojiPopover.style.display = 'grid';
   emojiPopover.style.visibility = 'hidden';
+  // Keep the popover anchored to the viewport and make it scrollable if needed
+  emojiPopover.style.position = 'fixed';
+  emojiPopover.style.maxHeight = '60vh';
+  emojiPopover.style.overflowY = 'auto';
+  emojiPopover.style.overflowX = 'hidden';
+  emojiPopover.style.maxWidth = '90vw';
+  emojiPopover.style.boxSizing = 'border-box';
   const btnRect = emojiBtn.getBoundingClientRect();
   const popW = emojiPopover.offsetWidth || 220;
   const popH = emojiPopover.offsetHeight || 200;
@@ -580,6 +980,9 @@ function openEmojiPopover() {
   emojiPopover.style.top = top + 'px';
   emojiPopover.style.left = left + 'px';
   emojiPopover.style.visibility = 'visible';
+  // Make the popover focusable so users can scroll with keyboard as well
+  emojiPopover.setAttribute('tabindex', '-1');
+  try { emojiPopover.focus({ preventScroll: true }); } catch (_) {}
   setTimeout(() => document.addEventListener('click', handleEmojiDocClick, { once: true }), 0);
 }
 
@@ -620,6 +1023,78 @@ if (emojiBtn) {
 // Close emoji popover on resize/orientation change
 window.addEventListener('resize', closeEmojiPopover);
 window.addEventListener('orientationchange', closeEmojiPopover);
+
+// Close all popovers on window resize
+window.addEventListener('resize', closeAllPopovers);
+window.addEventListener('orientationchange', closeAllPopovers);
+
+// --- Color and Pen Size Management ---
+function renderSwatches() {
+  if (!colorSwatches) return;
+  colorSwatches.innerHTML = '';
+  SWATCHES.forEach(color => {
+    const sw = document.createElement('div');
+    sw.className = 'swatch';
+    sw.style.background = color;
+    if (colorPicker && colorPicker.value === color) sw.classList.add('selected');
+    sw.onclick = () => {
+      if (colorPicker) colorPicker.value = color;
+      penColor = color;
+      updateColorPreview();
+      renderSwatches();
+      closeAllPopovers();
+    };
+    colorSwatches.appendChild(sw);
+  });
+}
+
+function updateColorPreview() {
+  if (colorPreview) {
+    colorPreview.style.background = penColor || '#7c3aed';
+  }
+}
+
+function updatePenSizePreview() {
+  if (penSizePreview) {
+    const line = penSizePreview.querySelector('.pen-size-line');
+    if (line) {
+      line.style.height = (penSize || 4) + 'px';
+    }
+  }
+}
+
+// Initialize color picker
+if (colorPicker) {
+  colorPicker.oninput = (e) => {
+    penColor = e.target.value;
+    updateColorPreview();
+    renderSwatches();
+  };
+}
+
+// Initialize pen size range
+if (penSizeRange) {
+  penSizeRange.oninput = (e) => {
+    penSize = parseInt(e.target.value);
+    updatePenSizePreview();
+    // Update the display value
+    const penSizeValue = document.getElementById('penSizeValue');
+    if (penSizeValue) {
+      penSizeValue.textContent = penSize;
+    }
+  };
+}
+
+// Set initial values
+penColor = penColor || '#7c3aed';
+penSize = penSize || 4;
+
+// Initialize UI
+if (colorPicker) colorPicker.value = penColor;
+if (penSizeRange) penSizeRange.value = penSize;
+updateColorPreview();
+renderSwatches();
+updatePenSizePreview();
 function renderSwatches() {
   colorSwatches.innerHTML = '';
   SWATCHES.forEach(color => {
@@ -652,6 +1127,10 @@ function updatePenSizePreview() {
 penSizeRange.oninput = (e) => {
   penSize = parseInt(e.target.value);
   updatePenSizePreview();
+  const penSizeValue = document.getElementById('penSizeValue');
+  if (penSizeValue) {
+    penSizeValue.textContent = penSize;
+  }
 };
 // --- Tooltips (native via title attr, see HTML) ---
 // --- Initial Render ---
@@ -660,6 +1139,221 @@ updateColorPreview();
 renderSwatches();
 penSizeRange.value = penSize;
 updatePenSizePreview();
+const penSizeValueEl = document.getElementById('penSizeValue');
+if (penSizeValueEl) { penSizeValueEl.textContent = penSize; }
+
+// --- Sticky Notes ---
+if (stickyNoteBtn) {
+  stickyNoteBtn.onclick = () => {
+    // Create sticky note at a random position within the visible canvas area
+    const canvasArea = document.querySelector('.canvas-area');
+    const x = Math.random() * 300 + 50; // Random position between 50-350px
+    const y = Math.random() * 200 + 50; // Random position between 50-250px
+    createStickyNote(x, y, 'Click to edit...');
+  };
+}
+
+function createStickyNote(x, y, text = 'Click to edit...', color = '#fffbe7') {
+  const note = document.createElement('div');
+  note.className = 'sticky-note';
+  note.contentEditable = true;
+  note.style.left = x + 'px';
+  note.style.top = y + 'px';
+  note.style.background = color;
+  note.innerText = text;
+  note.dataset.id = Date.now().toString();
+
+  // Add color picker button
+  const colorBtn = document.createElement('button');
+  colorBtn.className = 'sticky-note-color';
+  colorBtn.innerHTML = '🎨';
+  colorBtn.onclick = (e) => {
+    e.stopPropagation();
+    showStickyColorPicker(note);
+  };
+
+  note.appendChild(colorBtn);
+  // Select on touch
+  note.addEventListener('touchstart', (e) => { e.stopPropagation(); setSelectedStickyNote(note); });
+
+  // Make draggable
+  note.onmousedown = (e) => {
+    if (e.target === colorBtn) return;
+    setSelectedStickyNote(note);
+    let shiftX = e.clientX - note.offsetLeft;
+    let shiftY = e.clientY - note.offsetTop;
+
+    function moveAt(pageX, pageY) {
+      note.style.left = pageX - shiftX + 'px';
+      note.style.top = pageY - shiftY + 'px';
+    }
+
+    function onMouseMove(e) {
+      moveAt(e.pageX, e.pageY);
+    }
+
+    document.addEventListener('mousemove', onMouseMove);
+
+    note.onmouseup = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      note.onmouseup = null;
+      socket.emit('sticky-move', {
+        id: note.dataset.id,
+        left: note.style.left,
+        top: note.style.top,
+        text: note.innerText,
+        color: note.style.background,
+        page: currentPage
+      });
+      saveCurrentPage();
+    };
+  };
+
+  // Handle text editing
+  note.oninput = () => {
+    socket.emit('sticky-edit', {
+      id: note.dataset.id,
+      left: note.style.left,
+      top: note.style.top,
+      text: note.innerText,
+      color: note.style.background,
+      page: currentPage
+    });
+    saveCurrentPage();
+  };
+
+  stickyNotes.appendChild(note);
+  setSelectedStickyNote(note);
+
+  // Emit to other users
+  socket.emit('sticky-add', {
+    id: note.dataset.id,
+    left: note.style.left,
+    top: note.style.top,
+    text: note.innerText,
+    color: note.style.background,
+    page: currentPage
+  });
+
+  saveCurrentPage();
+  return note;
+}
+
+function showStickyColorPicker(note) {
+  const colors = ['#fffbe7', '#fef3c7', '#fecaca', '#fed7d7', '#e0e7ff', '#d1fae5', '#f3e8ff', '#fce7f3'];
+
+  const picker = document.createElement('div');
+  picker.className = 'sticky-color-picker';
+  picker.style.position = 'absolute';
+  picker.style.top = '30px';
+  picker.style.right = '0';
+  picker.style.background = 'white';
+  picker.style.border = '2px solid #e5e7eb';
+  picker.style.borderRadius = '8px';
+  picker.style.padding = '8px';
+  picker.style.display = 'grid';
+  picker.style.gridTemplateColumns = 'repeat(4, 20px)';
+  picker.style.gap = '4px';
+  picker.style.zIndex = '1000';
+  picker.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+
+  colors.forEach(color => {
+    const colorBtn = document.createElement('button');
+    colorBtn.style.width = '20px';
+    colorBtn.style.height = '20px';
+    colorBtn.style.background = color;
+    colorBtn.style.border = '1px solid #ccc';
+    colorBtn.style.borderRadius = '4px';
+    colorBtn.style.cursor = 'pointer';
+    colorBtn.onclick = () => {
+      note.style.background = color;
+      socket.emit('sticky-edit', {
+        id: note.dataset.id,
+        left: note.style.left,
+        top: note.style.top,
+        text: note.innerText,
+        color: color,
+        page: currentPage
+      });
+      saveCurrentPage();
+      picker.remove();
+    };
+    picker.appendChild(colorBtn);
+  });
+
+  note.appendChild(picker);
+
+  // Remove picker when clicking outside
+  setTimeout(() => {
+    document.addEventListener('click', function removePicker(e) {
+      if (!picker.contains(e.target)) {
+        picker.remove();
+        document.removeEventListener('click', removePicker);
+      }
+    });
+  }, 0);
+}
+
+// Utility: ensure sticky note controls exist and sync delete visibility
+function ensureStickyControls(note) {
+  if (!note) return;
+  // Ensure color button exists
+  let colorBtn = note.querySelector('.sticky-note-color');
+  if (!colorBtn) {
+    colorBtn = document.createElement('button');
+    colorBtn.className = 'sticky-note-color';
+    colorBtn.innerHTML = '🎨';
+    colorBtn.onclick = (e) => {
+      e.stopPropagation();
+      showStickyColorPicker(note);
+    };
+    note.appendChild(colorBtn);
+  }
+}
+
+// Socket events for sticky notes
+socket.on('sticky-add', (data) => {
+  const existingNote = document.querySelector(`[data-id="${data.id}"]`);
+  if (!existingNote) {
+    createStickyNote(
+      parseInt(data.left) || 100,
+      parseInt(data.top) || 100,
+      data.text || 'Click to edit...',
+      data.color || '#fffbe7'
+    );
+  }
+});
+
+socket.on('sticky-edit', (data) => {
+  const note = document.querySelector(`[data-id="${data.id}"]`);
+  if (note) {
+    note.style.left = data.left;
+    note.style.top = data.top;
+    note.style.background = data.color || '#fffbe7';
+    if (note.innerText !== data.text) {
+      note.innerText = data.text;
+    }
+  }
+});
+
+socket.on('sticky-move', (data) => {
+  const note = document.querySelector(`[data-id="${data.id}"]`);
+  if (note) {
+    note.style.left = data.left;
+    note.style.top = data.top;
+    note.style.background = data.color || '#fffbe7';
+    if (note.innerText !== data.text) {
+      note.innerText = data.text;
+    }
+  }
+});
+
+socket.on('sticky-delete', (data) => {
+  const note = document.querySelector(`[data-id="${data.id}"]`);
+  if (note) {
+    note.remove();
+  }
+});
 
 // --- Undo/Redo Stack ---
 let undoStack = [], redoStack = [];
@@ -767,8 +1461,8 @@ function loadPage(idx) {
     if (total === 0) drawAll();
     pages[idx].images.forEach(obj => {
       const img = new window.Image();
-      img.onload = function() {
-        imagesOnCanvas.push({img, x: obj.x, y: obj.y, w: obj.w, h: obj.h});
+      img.onload = function () {
+        imagesOnCanvas.push({ img, x: obj.x, y: obj.y, w: obj.w, h: obj.h });
         loaded++;
         if (loaded === total) drawAll();
       };
@@ -788,7 +1482,11 @@ function loadPage(idx) {
       note.style.left = noteData.left;
       note.style.top = noteData.top;
       note.innerText = noteData.text;
+      note.dataset.id = noteData.id || generateNoteId();
+      note.addEventListener('mousedown', () => setSelectedStickyNote(note));
+      note.addEventListener('touchstart', (e) => { e.stopPropagation(); setSelectedStickyNote(note); });
       note.onmousedown = (e) => {
+        setSelectedStickyNote(note);
         let shiftX = e.clientX - note.offsetLeft;
         let shiftY = e.clientY - note.offsetTop;
         function moveAt(pageX, pageY) {
@@ -808,27 +1506,28 @@ function loadPage(idx) {
       note.ondblclick = () => { note.remove(); saveCurrentPage(); };
       note.oninput = () => saveCurrentPage();
       // Attach handlers so moving/editing/deleting emits page-aware events
-  note.onmousedown = (e) => {
-    let shiftX = e.clientX - note.offsetLeft;
-    let shiftY = e.clientY - note.offsetTop;
-    function moveAt(pageX, pageY) {
-      note.style.left = pageX - shiftX + 'px';
-      note.style.top = pageY - shiftY + 'px';
-      socket.emit('sticky-move', { id: note.dataset.id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage });
-    }
-    function onMouseMove(e) {
-      moveAt(e.pageX, e.pageY);
-    }
-    document.addEventListener('mousemove', onMouseMove);
-    note.onmouseup = () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      note.onmouseup = null;
-      saveCurrentPage();
-    };
-  };
-  note.ondblclick = () => { note.remove(); socket.emit('sticky-delete', { id: note.dataset.id, page: currentPage }); saveCurrentPage(); };
-  note.oninput = () => { socket.emit('sticky-edit', { id: note.dataset.id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage }); saveCurrentPage(); };
-  stickyNotes.appendChild(note);
+      note.onmousedown = (e) => {
+        setSelectedStickyNote(note);
+        let shiftX = e.clientX - note.offsetLeft;
+        let shiftY = e.clientY - note.offsetTop;
+        function moveAt(pageX, pageY) {
+          note.style.left = pageX - shiftX + 'px';
+          note.style.top = pageY - shiftY + 'px';
+          socket.emit('sticky-move', { id: note.dataset.id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage });
+        }
+        function onMouseMove(e) {
+          moveAt(e.pageX, e.pageY);
+        }
+        document.addEventListener('mousemove', onMouseMove);
+        note.onmouseup = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          note.onmouseup = null;
+          saveCurrentPage();
+        };
+      };
+      note.ondblclick = () => { note.remove(); socket.emit('sticky-delete', { id: note.dataset.id, page: currentPage }); saveCurrentPage(); };
+      note.oninput = () => { socket.emit('sticky-edit', { id: note.dataset.id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage }); saveCurrentPage(); };
+      stickyNotes.appendChild(note);
     });
   }
 }
@@ -865,7 +1564,7 @@ socket.on('page-change', data => {
 const pageNav = document.createElement('div');
 pageNav.id = 'pageNav';
 pageNav.style.display = 'flex';
-pageNav.style.justifyContent = 'center';
+pageNav.style.justifyContent = 'flex-start';
 pageNav.style.alignItems = 'center';
 pageNav.style.gap = '12px';
 pageNav.style.margin = '12px 0';
@@ -877,7 +1576,7 @@ const addBtn = document.createElement('button');
 addBtn.textContent = '+ Add Page';
 const pageLabel = document.createElement('span');
 pageNav.append(prevBtn, pageLabel, nextBtn, addBtn);
-document.querySelector('.toolbar').after(pageNav);
+document.getElementById('appLogo').after(pageNav);
 
 // --- Page Add Sync ---
 socket.on('page-add', data => {
@@ -913,6 +1612,33 @@ lockBtn.onclick = () => {
 };
 // Insert lockBtn before addBtn in pageNav
 pageNav.insertBefore(lockBtn, addBtn);
+// --- Sticky Note Delete Button in toolbar ---
+let stickyDeleteBtn = document.createElement('button');
+stickyDeleteBtn.id = 'stickyNoteDeleteBtn';
+stickyDeleteBtn.textContent = 'Delete Note';
+stickyDeleteBtn.style.background = '#ef4444';
+stickyDeleteBtn.style.color = '#fff';
+stickyDeleteBtn.style.border = 'none';
+stickyDeleteBtn.style.borderRadius = '8px';
+stickyDeleteBtn.style.padding = '8px 16px';
+stickyDeleteBtn.style.fontWeight = 'bold';
+stickyDeleteBtn.style.cursor = 'pointer';
+stickyDeleteBtn.style.display = 'none';
+stickyDeleteBtn.style.marginRight = '8px';
+stickyDeleteBtn.onclick = () => {
+  if (selectedStickyNote) {
+    const id = selectedStickyNote.dataset.id;
+    if (id) {
+      socket.emit('sticky-delete', { id, page: currentPage });
+    }
+    selectedStickyNote.remove();
+    selectedStickyNote = null;
+    saveCurrentPage();
+    showImageLockButton();
+  }
+};
+// Insert delete button before Add Page
+pageNav.insertBefore(stickyDeleteBtn, addBtn);
 
 function showImageLockButton() {
   if (selectedImage || lockedImage) {
@@ -921,7 +1647,35 @@ function showImageLockButton() {
   } else {
     lockBtn.style.display = 'none';
   }
+  if (typeof stickyDeleteBtn !== 'undefined') {
+    stickyDeleteBtn.style.display = selectedStickyNote ? '' : 'none';
+  }
 }
+
+// --- Sticky Note Selection Helper ---
+function setSelectedStickyNote(note) {
+  const prev = selectedStickyNote;
+  if (prev && prev !== note) {
+    prev.classList.remove('selected');
+  }
+  selectedStickyNote = note || null;
+  if (selectedStickyNote) {
+    selectedStickyNote.classList.add('selected');
+  }
+  showImageLockButton();
+}
+
+// Clear selection when clicking outside notes (but not when clicking the toolbar delete button)
+document.addEventListener('click', (e) => {
+  if (selectedStickyNote && !selectedStickyNote.contains(e.target)) {
+    if (typeof stickyDeleteBtn !== 'undefined' && (e.target === stickyDeleteBtn || (stickyDeleteBtn && stickyDeleteBtn.contains(e.target)))) {
+      return; // allow toolbar delete button to act without clearing selection first
+    }
+    selectedStickyNote.classList.remove('selected');
+    selectedStickyNote = null;
+    showImageLockButton();
+  }
+});
 
 function updatePageNav() {
   pageLabel.textContent = `Page ${currentPage + 1} of ${pages.length}`;
@@ -937,14 +1691,14 @@ updatePageNav();
 saveLoadExport.onclick = () => notify('Save/Load/Export coming soon!');
 // --- Invite Link ---
 function updateInviteLink() {
-  let base = window.location.origin + window.location.pathname;
+  const base = window.location.origin + window.location.pathname;
   let params = `?room=${encodeURIComponent(roomId || '')}`;
-  if (roomPassword.value) params += `&password=${encodeURIComponent(roomPassword.value)}`;
-  inviteLink.value = base + params;
-  inviteLink.style.display = '';
-  if (copyInviteBtn) copyInviteBtn.style.display = '';
+  if (typeof roomPassword !== 'undefined' && roomPassword && roomPassword.value) {
+    params += `&password=${encodeURIComponent(roomPassword.value)}`;
+  }
+  const newUrl = base + params;
   // Update URL without reload for easy sharing
-  try { window.history.replaceState({}, '', inviteLink.value); } catch (_) {}
+  try { window.history.replaceState({}, '', newUrl); } catch (_) { }
 }
 // Call updateInviteLink after joining/creating room and after setting password
 setPasswordBtn.onclick = () => {
@@ -1000,13 +1754,7 @@ if (joinForm) {
 // --- Eraser Button ---
 eraserBtn.onclick = () => {
   erasing = !erasing;
-  if (erasing) {
-    penColor = '#fff';
-    eraserBtn.style.background = 'linear-gradient(135deg, #fbbf24, #f3f4f6)';
-  } else {
-    penColor = colorPicker.value;
-    eraserBtn.style.background = '';
-  }
+  eraserBtn.style.background = erasing ? 'linear-gradient(135deg, #fbbf24, #f3f4f6)' : '';
 };
 
 // --- Download as PNG ---
@@ -1030,15 +1778,15 @@ imageInput.onchange = (e) => {
   const files = Array.from(e.target.files);
   files.forEach(file => {
     const reader = new FileReader();
-    reader.onload = function(ev) {
+    reader.onload = function (ev) {
       const img = new window.Image();
-      img.onload = function() {
+      img.onload = function () {
         const scale = Math.min(canvas.width / img.width, canvas.height / img.height, 0.5);
         const w = img.width * scale;
         const h = img.height * scale;
         const x = (canvas.width - w) / 2;
         const y = (canvas.height - h) / 2;
-        const newObj = {img, x, y, w, h, src: ev.target.result};
+        const newObj = { img, x, y, w, h, src: ev.target.result };
         imagesOnCanvas.push(newObj);
         selectedImage = newObj;
         lockedImage = null;
@@ -1078,7 +1826,10 @@ socket.on('image-delete', data => {
 });
 
 // --- Add Page from Toolbar ---
-multiPageBtn.onclick = addPage;
+// Remove Pages button handler and element if present
+if (typeof multiPageBtn !== 'undefined' && multiPageBtn) {
+  try { multiPageBtn.remove(); } catch (_) {}
+}
 
 // --- drawAll: Redraw all images and shapes for current page ---
 function drawAll() {
@@ -1107,6 +1858,8 @@ function drawAll() {
   showImageLockButton();
   if (pages && pages[currentPage] && pages[currentPage].drawings) {
     pages[currentPage].drawings.forEach(line => {
+      const prevComp = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = line.erase ? 'destination-out' : 'source-over';
       ctx.strokeStyle = line.color;
       ctx.lineWidth = line.size;
       ctx.lineCap = 'round';
@@ -1115,6 +1868,7 @@ function drawAll() {
       ctx.lineTo(line.to.x, line.to.y);
       ctx.stroke();
       ctx.closePath();
+      ctx.globalCompositeOperation = prevComp;
     });
   }
 }
@@ -1132,7 +1886,9 @@ stickyNoteBtn.onclick = () => {
   note.style.left = Math.random() * (whiteboard.offsetWidth - 160) + 'px';
   note.style.top = Math.random() * (whiteboard.offsetHeight - 120) + 'px';
   note.innerText = 'Sticky Note';
+  note.addEventListener('touchstart', (e) => { e.stopPropagation(); setSelectedStickyNote(note); });
   note.onmousedown = (e) => {
+    setSelectedStickyNote(note);
     let shiftX = e.clientX - note.offsetLeft;
     let shiftY = e.clientY - note.offsetTop;
     function moveAt(pageX, pageY) {
@@ -1153,6 +1909,8 @@ stickyNoteBtn.onclick = () => {
   note.ondblclick = () => { note.remove(); socket.emit('sticky-delete', { id, page: currentPage }); saveCurrentPage(); };
   note.oninput = () => { socket.emit('sticky-edit', { id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage }); saveCurrentPage(); };
   stickyNotes.appendChild(note);
+  ensureStickyControls(note);
+  setSelectedStickyNote(note);
   socket.emit('sticky-add', { id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage });
   saveCurrentPage();
 };
@@ -1175,7 +1933,9 @@ socket.on('sticky-add', data => {
   note.style.top = data.top;
   note.innerText = data.text;
   // Attach handlers for remote-created notes as well
+  note.addEventListener('touchstart', (e) => { e.stopPropagation(); setSelectedStickyNote(note); });
   note.onmousedown = (e) => {
+    setSelectedStickyNote(note);
     let shiftX = e.clientX - note.offsetLeft;
     let shiftY = e.clientY - note.offsetTop;
     function moveAt(pageX, pageY) {
@@ -1196,6 +1956,7 @@ socket.on('sticky-add', data => {
   note.ondblclick = () => { note.remove(); socket.emit('sticky-delete', { id: data.id, page: targetPage }); saveCurrentPage(); };
   note.oninput = () => { socket.emit('sticky-edit', { id: data.id, left: note.style.left, top: note.style.top, text: note.innerText, page: targetPage }); saveCurrentPage(); };
   stickyNotes.appendChild(note);
+  setSelectedStickyNote(note);
 });
 socket.on('sticky-move', data => {
   const targetPage = typeof data.page === 'number' ? data.page : currentPage;
@@ -1238,8 +1999,8 @@ socket.on('sticky-delete', data => {
 socket.on('image-add', data => {
   const img = new window.Image();
   const targetPage = typeof data.page === 'number' ? data.page : currentPage;
-  img.onload = function() {
-    const newObj = {img, x: data.x, y: data.y, w: data.w, h: data.h, src: data.src};
+  img.onload = function () {
+    const newObj = { img, x: data.x, y: data.y, w: data.w, h: data.h, src: data.src };
     // Ensure storage for target page
     while (pages.length <= targetPage) pages.push({ snapshot: null, notes: [], images: [], drawings: [] });
     if (!pages[targetPage].images) pages[targetPage].images = [];
@@ -1281,13 +2042,23 @@ socket.on('image-resize', data => {
 
 if (copyInviteBtn) {
   copyInviteBtn.onclick = async () => {
+    const base = window.location.origin + window.location.pathname;
+    let params = `?room=${encodeURIComponent(roomId || '')}`;
+    if (typeof roomPassword !== 'undefined' && roomPassword && roomPassword.value) {
+      params += `&password=${encodeURIComponent(roomPassword.value)}`;
+    }
+    const linkToCopy = base + params;
     try {
-      await navigator.clipboard.writeText(inviteLink.value);
+      await navigator.clipboard.writeText(linkToCopy);
       copyInviteBtn.textContent = '✅';
     } catch (e) {
       // Fallback
-      inviteLink.select();
+      const tmp = document.createElement('textarea');
+      tmp.value = linkToCopy;
+      document.body.appendChild(tmp);
+      tmp.select();
       document.execCommand('copy');
+      document.body.removeChild(tmp);
       copyInviteBtn.textContent = '✅';
     }
     setTimeout(() => { copyInviteBtn.textContent = '🔗'; }, 1000);
@@ -1300,7 +2071,9 @@ window.addEventListener('DOMContentLoaded', () => {
   const room = params.get('room');
   const password = params.get('password');
   if (room) roomInput.value = room;
-  if (password) roomPassword.value = password;
+  if (password && typeof roomPassword !== 'undefined' && roomPassword) roomPassword.value = password;
+  const rpc = document.getElementById('roomPasswordContainer');
+  if (rpc) rpc.style.display = (roomPassword && roomPassword.value) ? '' : 'none';
 });
 
 // --- Improved Audio Constraints ---
@@ -1375,7 +2148,7 @@ micBtn.onclick = async () => {
 function startVoiceDetection() {
   if (!localStream) return;
   if (speakingInterval) clearInterval(speakingInterval);
-  if (audioContext) try { audioContext.close(); } catch (_) {}
+  if (audioContext) try { audioContext.close(); } catch (_) { }
   audioContext = new (window.AudioContext || window.webkitAudioContext)();
   const source = audioContext.createMediaStreamSource(localStream);
   const analyser = audioContext.createAnalyser();
@@ -1458,7 +2231,7 @@ socket.on('voice-users', users => {
   // Remove peer connections for users who left
   Object.keys(peerConnections).forEach(id => {
     if (!users.includes(id)) {
-      try { peerConnections[id].close(); } catch (e) {}
+      try { peerConnections[id].close(); } catch (e) { }
       delete peerConnections[id];
     }
   });
