@@ -1,103 +1,200 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <meta name="description" content="CollaBoard – a fast, modern real‑time collaborative whiteboard with chat and multipage support." />
-  <title>CollaBoard — Realtime Whiteboard</title>
-  <link rel="stylesheet" href="style.css"/>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-</head>
-<body>
-  <div id="home" class="centered">
-    <h1>CollaBoard</h1>
-    <p class="tagline">Real‑time collaborative whiteboard</p>
-    <form id="joinForm" autocomplete="off">
-      <input id="username" type="text" placeholder="Enter your name" aria-label="Your name" autocomplete="off" required />
-      <input id="room" type="text" placeholder="Room code (optional)" aria-label="Room code" autocomplete="off" />
-      <button id="joinBtn" type="submit">Join or Create Room</button>
-    </form>
-  </div>
-  <div id="app" style="display:none;">
-    <div class="main-content">
-      <div class="whiteboard-area">
-        <!-- Top Menu (Toolbar) -->
-        <div class="toolbar" id="toolbar">
-          <div class="toolbar-brand" id="toolbarBrand" aria-label="App name">CollaBoard</div>
-          <div class="color-preview" id="colorPreview" title="Pen Color"></div>
-          <button class="toolbar-btn" id="colorBtn" title="Change Color"><span class="icon-pen"></span></button>
-          <div class="popover" id="colorPopover">
-            <div class="swatch-row" id="colorSwatches"></div>
-            <input type="color" id="colorPicker" style="width:100%" />
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="CollaBoard – a fast, modern real‑time collaborative whiteboard with chat and multipage support."
+    />
+    <title>CollaBoard — Realtime Whiteboard</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <div id="home" class="centered">
+      <h1>CollaBoard</h1>
+      <p class="tagline">Real‑time collaborative whiteboard</p>
+      <form id="joinForm" autocomplete="off">
+        <input
+          id="username"
+          type="text"
+          placeholder="Enter your name"
+          aria-label="Your name"
+          autocomplete="off"
+          required
+        />
+        <input
+          id="room"
+          type="text"
+          placeholder="Room code (optional)"
+          aria-label="Room code"
+          autocomplete="off"
+        />
+        <button id="joinBtn" type="submit">Join or Create Room</button>
+      </form>
+    </div>
+    <div id="app" style="display: none">
+      <div class="main-content">
+        <div class="whiteboard-area">
+          <!-- Fixed Logo -->
+          <div class="app-logo" id="appLogo">
+            <span class="logo-text">CollaBoard</span>
           </div>
-          <div class="pen-size-preview" id="penSizePreview"><div class="pen-size-line" style="width:28px;height:4px;"></div></div>
-          <button class="toolbar-btn" id="penSizeBtn" title="Pen Size"><span class="icon-pen"></span></button>
-          <div class="popover" id="penSizePopover">
-            <input type="range" id="penSizeRange" min="1" max="24" value="4" />
+          <!-- Floating Toolbar -->
+          <div class="toolbar" id="toolbar">
+            <div
+              class="color-preview"
+              id="colorPreview"
+              title="Pen Color"
+            ></div>
+            <button class="toolbar-btn" id="colorBtn" title="Change Color">
+              <span class="icon-palette"></span>
+            </button>
+            <div class="pen-size-preview" id="penSizePreview">
+              <div class="pen-size-line" style="width: 28px; height: 4px"></div>
+            </div>
+            <button class="toolbar-btn" id="penSizeBtn" title="Pen Size">
+              <span class="icon-brush-size"></span>
+            </button>
+            <button class="toolbar-btn" id="eraserBtn" title="Eraser">
+              <span class="icon-eraser"></span>
+            </button>
+            <button class="toolbar-btn" id="undoBtn" title="Undo">
+              <span class="icon-undo"></span>
+            </button>
+            <button class="toolbar-btn" id="redoBtn" title="Redo">
+              <span class="icon-redo"></span>
+            </button>
+            <button class="toolbar-btn" id="micBtn" title="Toggle Mic">
+              <span class="icon-mic">🎤</span>
+            </button>
+            <button
+              class="toolbar-btn"
+              id="downloadBtn"
+              title="Download as PNG"
+            >
+              <span class="icon-download"></span>
+            </button>
+            <button class="toolbar-btn" id="stickyNoteBtn" title="Sticky Note">
+              📝
+            </button>
+            <button class="toolbar-btn" id="imageBtn" title="Upload Image">
+              🖼️
+            </button>
+            <button class="toolbar-btn" id="multiPageBtn" title="Pages">
+              📄
+            </button>
+            <button
+              class="toolbar-btn"
+              id="chatSidebarToggle"
+              title="Toggle Chat Panel"
+            >
+              💬
+            </button>
           </div>
-          <button class="toolbar-btn" id="eraserBtn" title="Eraser"><span class="icon-eraser"></span></button>
-          <button class="toolbar-btn" id="undoBtn" title="Undo"><span class="icon-undo"></span></button>
-          <button class="toolbar-btn" id="redoBtn" title="Redo"><span class="icon-redo"></span></button>
-          <button class="toolbar-btn" id="micBtn" title="Toggle Mic"><span class="icon-mic">🎤</span></button>
-          <button class="toolbar-btn" id="downloadBtn" title="Download as PNG"><span class="icon-download"></span></button>
-          <button class="toolbar-btn" id="stickyNoteBtn" title="Sticky Note">📝</button>
-          <button class="toolbar-btn" id="imageBtn" title="Upload Image">🖼️</button>
-          <button class="toolbar-btn" id="multiPageBtn" title="Pages">📄</button>
-          <button class="toolbar-btn" id="chatSidebarToggle" title="Toggle Chat Panel">💬</button>
-        </div>
-        <!-- Canvas Area -->
-        <div class="canvas-area">
-          <canvas id="whiteboard"></canvas>
-          <div id="stickyNotes"></div>
-        </div>
-      </div>
-      <div class="sidebar">
-        <aside id="userPanel">
-          <h3>Users</h3>
-          <ul id="userList"></ul>
-          <div id="inviteLinkContainer">
-            <input type="text" id="inviteLink" readonly value="" />
-            <button id="copyInviteBtn" title="Copy Invite Link">🔗</button>
-          </div>
-          <div id="roomPasswordContainer">
-            <input type="password" id="roomPassword" placeholder="Room Password" />
-            <button id="setPasswordBtn">Set</button>
-          </div>
-          <div id="roleContainer"></div>
-        </aside>
-        <section id="chatArea">
-          <div id="chatHeader">
-            <span>Chat</span>
-            <div>
-              <button id="chatToggleBtn" title="Collapse/Expand Chat">⬇️</button>
-              <button id="clearChatBtn" title="Clear Chat">🗑️</button>
+          <!-- Canvas Area with Native Scrollbars -->
+          <div class="canvas-area">
+            <div class="canvas-wrapper">
+              <!-- Scale markers -->
+              <div class="scale-markers-top"></div>
+              <div class="scale-markers-left"></div>
+              <!-- Canvas and content -->
+              <canvas id="whiteboard"></canvas>
+              <div id="stickyNotes"></div>
+              <!-- Board boundary indicators -->
+              <div class="board-boundary"></div>
+            </div>
+            <div class="scroll-hint" id="scrollHint">
+              <span>💡 Scroll to navigate the 2560×1440 drawing area</span>
+            </div>
+            <div class="position-indicator" id="positionIndicator">
+              <span>Position: 0, 0</span>
             </div>
           </div>
-          <div id="chatBox"></div>
-          <div id="typingIndicator"></div>
-          <form id="chatForm">
-            <input type="text" id="chatInput" placeholder="Type a message..." autocomplete="off" />
-            <button type="button" id="emojiBtn" title="Emoji">😊</button>
-            <button type="submit" id="sendBtn" aria-label="Send">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <path d="M3 11l18-8-8 18-2-7-8-3z" stroke="#7c3aed" stroke-width="2" fill="#ede9fe"/>
-              </svg>
-            </button>
-          </form>
-        </section>
+        </div>
+        <div class="sidebar">
+          <aside id="userPanel">
+            <h3>Users</h3>
+            <ul id="userList"></ul>
+            <div id="inviteLinkContainer">
+              <input type="text" id="inviteLink" readonly value="" />
+              <button id="copyInviteBtn" title="Copy Invite Link">🔗</button>
+            </div>
+            <div id="roomPasswordContainer">
+              <input
+                type="password"
+                id="roomPassword"
+                placeholder="Room Password"
+              />
+              <button id="setPasswordBtn">Set</button>
+            </div>
+            <div id="roleContainer"></div>
+          </aside>
+          <section id="chatArea">
+            <div id="chatHeader">
+              <span>Chat</span>
+              <div>
+                <button id="chatToggleBtn" title="Collapse/Expand Chat">
+                  ⬇️
+                </button>
+                <button id="clearChatBtn" title="Clear Chat">🗑️</button>
+              </div>
+            </div>
+            <div id="chatBox"></div>
+            <div id="typingIndicator"></div>
+            <form id="chatForm">
+              <input
+                type="text"
+                id="chatInput"
+                placeholder="Type a message..."
+                autocomplete="off"
+              />
+              <button type="button" id="emojiBtn" title="Emoji">😊</button>
+              <button type="submit" id="sendBtn" aria-label="Send">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3 11l18-8-8 18-2-7-8-3z"
+                    stroke="#7c3aed"
+                    stroke-width="2"
+                    fill="#ede9fe"
+                  />
+                </svg>
+              </button>
+            </form>
+          </section>
+        </div>
       </div>
+      <div id="emojiPopover" style="display: none"></div>
+      <!-- Color Popover (outside toolbar to avoid clipping) -->
+      <div id="colorPopover" class="popover">
+        <div class="popover-label">Pen Color</div>
+        <div id="colorSwatches" class="swatch-row"></div>
+        <input id="colorPicker" type="color" aria-label="Choose color" />
+      </div>
+      <!-- Pen Size Popover (outside toolbar to avoid clipping) -->
+      <div id="penSizePopover" class="popover">
+        <div class="popover-label">Pen Size</div>
+        <input id="penSizeRange" type="range" min="1" max="50" step="1" />
+        <div class="pen-size-display">Size: <span id="penSizeValue">4</span> px</div>
+      </div>
+      <div id="notificationContainer"></div>
+      <div id="saveLoadExport" style="display: none"></div>
+      <div id="avatarNicknameModal" style="display: none"></div>
     </div>
-    <div id="emojiPopover" style="display:none;"></div>
-    <div id="notificationContainer"></div>
-    <div id="saveLoadExport" style="display:none;"></div>
-    <div id="avatarNicknameModal" style="display:none;"></div>
-  </div>
-  <audio id="remoteAudio" autoplay style="display:none;"></audio>
-  <!-- Floating chat toggle (shown on small screens) -->
-  <button id="chatFab" class="chat-fab" title="Toggle Chat">💬</button>
-  <!-- Mobile backdrop for chat drawer -->
-  <div id="mobileBackdrop" style="display:none;"></div>
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="app.js"></script>
-</body>
+    <audio id="remoteAudio" autoplay style="display: none"></audio>
+    <!-- Floating chat toggle (shown on small screens) -->
+    <button id="chatFab" class="chat-fab" title="Toggle Chat">💬</button>
+    <!-- Mobile backdrop for chat drawer -->
+    <div id="mobileBackdrop" style="display: none"></div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+  </body>
 </html>
