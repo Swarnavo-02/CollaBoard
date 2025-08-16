@@ -51,6 +51,8 @@ const whiteboard = document.getElementById('whiteboard');
 // Removed unused: whiteboardContainer
 const micBtn = document.getElementById('micBtn');
 const remoteAudio = document.getElementById('remoteAudio');
+// Map of peerId -> HTMLAudioElement for remote streams (supports multiple peers)
+const remoteAudioEls = {};
 const chatArea = document.getElementById('chatArea');
 const chatFab = document.getElementById('chatFab');
 const chatSidebarToggle = document.getElementById('chatSidebarToggle');
@@ -75,6 +77,8 @@ let resizeStart = { x: 0, y: 0, w: 0, h: 0 };
 let selectedImage = null;
 let lockedImage = null;
 let selectedStickyNote = null;
+// Debounce to prevent multiple sticky notes per tap/click
+let lastStickyCreate = 0;
 let localStream = null;
 let peerConnections = {};
 let isMicOn = false;
@@ -1145,10 +1149,12 @@ if (penSizeValueEl) { penSizeValueEl.textContent = penSize; }
 // --- Sticky Notes ---
 if (stickyNoteBtn) {
   stickyNoteBtn.onclick = () => {
-    // Create sticky note at a random position within the visible canvas area
-    const canvasArea = document.querySelector('.canvas-area');
-    const x = Math.random() * 300 + 50; // Random position between 50-350px
-    const y = Math.random() * 200 + 50; // Random position between 50-250px
+    const now = Date.now();
+    if (now - lastStickyCreate < 400) return; // debounce rapid taps/clicks
+    lastStickyCreate = now;
+    // Place initial note at top-left for predictability
+    const x = 20;
+    const y = 20;
     createStickyNote(x, y, 'Click to edit...');
   };
 }
@@ -1312,48 +1318,9 @@ function ensureStickyControls(note) {
 }
 
 // Socket events for sticky notes
-socket.on('sticky-add', (data) => {
-  const existingNote = document.querySelector(`[data-id="${data.id}"]`);
-  if (!existingNote) {
-    createStickyNote(
-      parseInt(data.left) || 100,
-      parseInt(data.top) || 100,
-      data.text || 'Click to edit...',
-      data.color || '#fffbe7'
-    );
-  }
-});
 
-socket.on('sticky-edit', (data) => {
-  const note = document.querySelector(`[data-id="${data.id}"]`);
-  if (note) {
-    note.style.left = data.left;
-    note.style.top = data.top;
-    note.style.background = data.color || '#fffbe7';
-    if (note.innerText !== data.text) {
-      note.innerText = data.text;
-    }
-  }
-});
 
-socket.on('sticky-move', (data) => {
-  const note = document.querySelector(`[data-id="${data.id}"]`);
-  if (note) {
-    note.style.left = data.left;
-    note.style.top = data.top;
-    note.style.background = data.color || '#fffbe7';
-    if (note.innerText !== data.text) {
-      note.innerText = data.text;
-    }
-  }
-});
 
-socket.on('sticky-delete', (data) => {
-  const note = document.querySelector(`[data-id="${data.id}"]`);
-  if (note) {
-    note.remove();
-  }
-});
 
 // --- Undo/Redo Stack ---
 let undoStack = [], redoStack = [];
@@ -1877,43 +1844,6 @@ function drawAll() {
 function generateNoteId() {
   return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).substr(2, 9));
 }
-stickyNoteBtn.onclick = () => {
-  const id = generateNoteId();
-  const note = document.createElement('div');
-  note.className = 'sticky-note';
-  note.contentEditable = true;
-  note.dataset.id = id;
-  note.style.left = Math.random() * (whiteboard.offsetWidth - 160) + 'px';
-  note.style.top = Math.random() * (whiteboard.offsetHeight - 120) + 'px';
-  note.innerText = 'Sticky Note';
-  note.addEventListener('touchstart', (e) => { e.stopPropagation(); setSelectedStickyNote(note); });
-  note.onmousedown = (e) => {
-    setSelectedStickyNote(note);
-    let shiftX = e.clientX - note.offsetLeft;
-    let shiftY = e.clientY - note.offsetTop;
-    function moveAt(pageX, pageY) {
-      note.style.left = pageX - shiftX + 'px';
-      note.style.top = pageY - shiftY + 'px';
-      socket.emit('sticky-move', { id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage });
-    }
-    function onMouseMove(e) {
-      moveAt(e.pageX, e.pageY);
-    }
-    document.addEventListener('mousemove', onMouseMove);
-    note.onmouseup = () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      note.onmouseup = null;
-      saveCurrentPage();
-    };
-  };
-  note.ondblclick = () => { note.remove(); socket.emit('sticky-delete', { id, page: currentPage }); saveCurrentPage(); };
-  note.oninput = () => { socket.emit('sticky-edit', { id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage }); saveCurrentPage(); };
-  stickyNotes.appendChild(note);
-  ensureStickyControls(note);
-  setSelectedStickyNote(note);
-  socket.emit('sticky-add', { id, left: note.style.left, top: note.style.top, text: note.innerText, page: currentPage });
-  saveCurrentPage();
-};
 
 socket.on('sticky-add', data => {
   const targetPage = typeof data.page === 'number' ? data.page : currentPage;
@@ -2076,6 +2006,18 @@ window.addEventListener('DOMContentLoaded', () => {
   if (rpc) rpc.style.display = (roomPassword && roomPassword.value) ? '' : 'none';
 });
 
+// Ensure remote audio element is allowed to autoplay on supported browsers
+window.addEventListener('DOMContentLoaded', () => {
+  try {
+    if (remoteAudio) {
+      remoteAudio.autoplay = true;
+      remoteAudio.playsInline = true;
+      remoteAudio.muted = false;
+      remoteAudio.volume = 1.0;
+    }
+  } catch (_) {}
+});
+
 // --- Improved Audio Constraints ---
 const audioConstraints = {
   audio: {
@@ -2127,6 +2069,7 @@ micBtn.onclick = async () => {
           }
         });
       }
+      await renegotiateAllPeers();
       console.log('Mic ON, localStream:', localStream);
     } catch (err) {
       alert('Microphone access denied.');
@@ -2192,7 +2135,39 @@ function createPeerConnection(peerId, isInitiator) {
   };
   pc.ontrack = event => {
     if (event.streams && event.streams[0]) {
-      remoteAudio.srcObject = event.streams[0];
+      // Get or create per-peer audio element and play
+      let el = remoteAudioEls[peerId];
+      if (!el) {
+        // Prefer the single built-in element for the first peer
+        if (remoteAudio && !remoteAudio.dataset.assigned) {
+          el = remoteAudio;
+          remoteAudio.dataset.assigned = '1';
+        } else {
+          el = document.createElement('audio');
+          el.style.display = 'none';
+          document.body.appendChild(el);
+        }
+        el.autoplay = true;
+        el.playsInline = true;
+        el.muted = false;
+        el.volume = 1.0;
+        remoteAudioEls[peerId] = el;
+      }
+      el.srcObject = event.streams[0];
+      const tryPlay = () => {
+        const p = el.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {
+            // Autoplay might be blocked; retry on next user gesture
+            const resume = () => {
+              el.play().finally(() => document.removeEventListener('click', resume));
+            };
+            document.addEventListener('click', resume, { once: true });
+          });
+        }
+      };
+      if (el.readyState >= 2) tryPlay();
+      else el.onloadedmetadata = tryPlay;
     }
   };
   if (isInitiator) {
@@ -2233,6 +2208,16 @@ socket.on('voice-users', users => {
     if (!users.includes(id)) {
       try { peerConnections[id].close(); } catch (e) { }
       delete peerConnections[id];
+      // Also clean up any associated audio element
+      const el = remoteAudioEls[id];
+      if (el) {
+        try {
+          el.srcObject = null;
+          if (el !== remoteAudio) el.remove();
+        } catch (_) {}
+        if (el === remoteAudio && remoteAudio.dataset.assigned) delete remoteAudio.dataset.assigned;
+        delete remoteAudioEls[id];
+      }
     }
   });
 });
