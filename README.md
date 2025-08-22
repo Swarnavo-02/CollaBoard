@@ -57,4 +57,6 @@ package.json      # scripts and dependencies
 - Chat is open by default and can be toggled to reclaim full canvas width on desktop.
 
 ## License
-This Project is under MIT LICENSE
+
+This Project is under MIT License
+
